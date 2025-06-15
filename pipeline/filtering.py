@@ -258,7 +258,7 @@ def static_filter(df, column, threshold):
      return df 
 
 def word_alignment_filter(df, langs):
-    import scripts.align_source_target as ast
+    import align_source_target as ast
     source_lines = df[langs[0]]
     target_lines = df[langs[1]]
     margin_lines = list(df.index)
