@@ -1,0 +1,10 @@
+models/
+__pycache__
+data/ 
+evaluation/
+environment.yml
+dev-tools
+flores/
+smt_evaluation
+nmt_evaluation
+outputs/
