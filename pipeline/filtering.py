@@ -296,13 +296,13 @@ def tsv_to_moses_files(file):
             en_lines.append(preprocess_line(split[1]))
             si_lines.append(preprocess_line(split[2]))
             scores.append(preprocess_line(split[3]))
-    with open(f"training_nmt/{prefix}.en", "w", encoding="utf-8") as f:
+    with open(f"{prefix}.en", "w", encoding="utf-8") as f:
         for line in en_lines[1:]:
             f.write(f"{line}\n")
-    with open(f"training_nmt/{prefix}.si", "w", encoding="utf-8") as f:
+    with open(f"{prefix}.si", "w", encoding="utf-8") as f:
         for line in si_lines[1:]:
             f.write(f"{line}\n")
-    with open(f"training_nmt/{prefix}.scores.txt", "w", encoding="utf-8") as f:
+    with open(f"{prefix}.scores.txt", "w", encoding="utf-8") as f:
         for line in scores[1:]:
             f.write(f"{line}\n")
 
