@@ -14,7 +14,7 @@ from tqdm import tqdm
 from transformers import XLMRobertaModel, XLMRobertaTokenizer, AutoConfig, AutoModel, AutoTokenizer
 labse_encoder = SentenceTransformer('sentence-transformers/LaBSE', device=device)
 lang_codes = {"english": "__label__eng_Latn", "sinhala": "__label__sin_Sinh"}
-lang_laser_encoders = {}
+lang_laser_encoders = {} #sdf
 import argparse
 torch.serialization.add_safe_globals([argparse.Namespace])
 from laser_encoders import LaserEncoderPipeline
