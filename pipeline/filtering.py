@@ -13,7 +13,8 @@ from sentence_transformers import SentenceTransformer
 from tqdm import tqdm
 from transformers import XLMRobertaModel, XLMRobertaTokenizer, AutoConfig, AutoModel, AutoTokenizer
 labse_encoder = SentenceTransformer('sentence-transformers/LaBSE', device=device)
-lang_codes = {"english": "__label__eng_Latn", "sinhala": "__label__sin_Sinh"}
+lang_codes = {"english": "__label__eng_Latn", "sinhala": "__label__sin_Sinh", "nepali": "__label__npi_Deva"}
+lang_suffixes = {"en": "english", "si": "sinhala", "ne": "nepali"}
 lang_laser_encoders = {} #sdf
 import argparse
 torch.serialization.add_safe_globals([argparse.Namespace])
@@ -70,16 +71,24 @@ furina_indic = EmbeddingLoader(furina_indic_path, torch.device(device=device), l
 LENGTH_RATIO_MEAN = 0.968442560084747
 LENGTH_RATIO_STD = 0.2514354396303809
 #Define length ratio parameters based on NLLB
-with open("data/en-si/NLLB.en-si.en") as f1, open("data/en-si/NLLB.en-si.si") as f2: 
-    ratios = []
-    for line1, line2 in zip(f1, f2):
-        line1 = line1.removesuffix("\n")
-        line2= line2.removesuffix("\n")
-        ratios.append(float(len(line1)/len(line2)))
+def set_NLLB_ratios(lang1, lang2):
+    print(lang1, lang2)
+    global LENGTH_RATIO_MEAN, LENGTH_RATIO_STD
+    other = ""
+    if lang1 != "en":
+         other = lang1 
+    else: 
+         other = lang2 
+    with open(f"data/en-{other}/NLLB.en-{other}.{lang1}") as f1, open(f"data/en-{other}/NLLB.en-{other}.{lang2}") as f2: 
+        ratios = []
+        for line1, line2 in zip(f1, f2):
+            line1 = line1.removesuffix("\n")
+            line2= line2.removesuffix("\n")
+            ratios.append(float(len(line1)/len(line2)))
     import statistics 
     LENGTH_RATIO_MEAN = statistics.fmean(ratios)
     LENGTH_RATIO_STD = statistics.stdev(ratios)
-#     print(str(LENGTH_RATIO_MEAN) + " " + str(LENGTH_RATIO_STD))
+    return LENGTH_RATIO_MEAN, LENGTH_RATIO_STD
 
 def preprocess_line(line):
     line = line.removesuffix("\n")
@@ -97,7 +106,7 @@ def check_lengths(df, lang1, lang2, z_thresh=2.326):
 
 def check_script(sentence, lang):
     from GlotScript import sp, sc 
-    GlotScript_codes = {"english": "Latn", "sinhala": "Sinh"}
+    GlotScript_codes = {"english": "Latn", "sinhala": "Sinh", "nepali": "Deva"}
     result = sc(sentence)
     if GlotScript_codes[lang] in result.keys() and len(result[GlotScript_codes[lang]])/len(sentence) >= 0.2:
         return True
@@ -306,15 +315,34 @@ def tsv_to_moses_files(file):
         for line in scores[1:]:
             f.write(f"{line}\n")
 
-def main(files, langs, output, model, type="moses"):
+def main(files, output, model):
+    type = ""
     import pandas as pd
     df = None
     filtering_stats = {}
-    if type=="moses":
-        df = moses_to_df(files[0], files[1], langs[0], langs[1])
-    if type=="tmx":
+    if len(files) == 1:
+         type = "tmx"
+    else: 
+         type = "moses"
+    langs = []
+    if type=="tmx": 
+        import xml.etree.ElementTree as ET
+        tree = ET.parse(files[0])
+        root = tree.getroot()
+        body = root.find('body')
+        tu = body.find('tu') 
+        lang1 = tu[0].get("{http://www.w3.org/XML/1998/namespace}lang")
+        lang2 = tu[1].get("{http://www.w3.org/XML/1998/namespace}lang")
+        langs.append(lang_suffixes[lang1])
+        langs.append(lang_suffixes[lang2])
         df = tmx_to_df(files[0], langs[0], langs[1]) 
-    filtering_stats["Raw corpus"] = df.shape[0]
+    if type == "moses":
+         lang1 = files[0].split(".")[-1]
+         lang2 = files[1].split(".")[-1]
+         langs.append(lang_suffixes[lang1])
+         langs.append(lang_suffixes[lang2])
+         df = moses_to_df(files[0], files[1], langs[0], langs[1])
+    set_NLLB_ratios(lang1, lang2)
     #Remove duplicated sentence pairs 
     df.drop_duplicates(inplace=True, ignore_index=True)
     filtering_stats["After dropping duplicates"] = df.shape[0]
@@ -366,15 +394,9 @@ def main(files, langs, output, model, type="moses"):
 def main_cli(): 
     parser = argparse.ArgumentParser("filtering.py")
     parser.add_argument("--files", "-f", type=str, nargs="+")
-    parser.add_argument("--type", "-t", type=str, required=False)
-    parser.add_argument("--langs", "-l", type=str, nargs="+")
     parser.add_argument("--output", "-o", type=str)
-    # parser.add_argument("--percentile", "-p", type=float)
     parser.add_argument("--model", "-m", type=str)
     args = parser.parse_args()
-    if args.type=="tmx":
-        main(args.files, args.langs, args.output, args.model, args.type)
-    else: 
-        main(args.files, args.langs, args.output, args.model, args.type)
+    main(args.files, args.output, args.model)
 if __name__ == "__main__":
     main_cli()

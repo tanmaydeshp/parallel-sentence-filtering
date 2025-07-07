@@ -66,7 +66,7 @@ def align_source_target(sentence_pair_list, source_dict, target_dict):
         #   continue
         try:
             align_sent = align_model.get_word_aligns(source_sent, target_sent)['inter']
-        except ValueError as e: 
+        except Exception as e: 
             print(f"Error due to the following sentence pair: {source_sent} \t {target_sent}\nReason: {str(e)}\n")
             # if source_sent in source_dict: 
             #     del source_dict[source_sent]
@@ -74,6 +74,7 @@ def align_source_target(sentence_pair_list, source_dict, target_dict):
             #     del target_dict[target_sent]
             # split_sentence_pair_list.remove(sentence_pair)
             # sentence_pair_list.remove(f"{sentence_pair[0]}\t{sentence_pair[1]}")
+            alignement_list.append([])
             continue
         #align_sent_bwd = align_model.get_word_aligns(target_sent, source_sent)['inter'] symmetrical so not needed
         #print(align_sent)
@@ -101,6 +102,8 @@ def token_list_length(token_list):
 
 def align_len_sentence_percentage(alignment_list, sentence_pair, source_dict, target_dict, tokeniser):
     '''Compute the alignement coverage for a given sentence pair and alignment.'''
+    if alignment_list == []:
+        return 0
     split_sentence_pair = sentence_pair.split('\t')
     src_sent, trg_sent = source_dict[split_sentence_pair[0]], target_dict[split_sentence_pair[1]]
     #split_src_sent, split_trg_sent = src_sent.split(' '), trg_sent.split(' ')
