@@ -72,6 +72,10 @@ LENGTH_RATIO_MEAN = 0.968442560084747
 LENGTH_RATIO_STD = 0.2514354396303809
 #Define length ratio parameters based on NLLB
 def set_NLLB_ratios(lang1, lang2):
+    colab_ratios = {"en, ne": (0.9693840181280292, 0.2700320861142401), 
+                     "ne, en": (1.1109355531682032, 0.31124711658334797),
+                     "en, si": (0.968442560084747, 0.2514354396303809), 
+                     "si, en": (1.1030591942688206, 0.2932328170981356)}
     print(lang1, lang2)
     global LENGTH_RATIO_MEAN, LENGTH_RATIO_STD
     other = ""
@@ -79,16 +83,22 @@ def set_NLLB_ratios(lang1, lang2):
          other = lang1 
     else: 
          other = lang2 
-    with open(f"data/en-{other}/NLLB.en-{other}.{lang1}") as f1, open(f"data/en-{other}/NLLB.en-{other}.{lang2}") as f2: 
-        ratios = []
-        for line1, line2 in zip(f1, f2):
-            line1 = line1.removesuffix("\n")
-            line2= line2.removesuffix("\n")
-            ratios.append(float(len(line1)/len(line2)))
-    import statistics 
-    LENGTH_RATIO_MEAN = statistics.fmean(ratios)
-    LENGTH_RATIO_STD = statistics.stdev(ratios)
-    return LENGTH_RATIO_MEAN, LENGTH_RATIO_STD
+    if not(os.path.exists(f"data/en-{other}/NLLB.en-{other}.{lang1}")) or not(os.path.exists(f"data/en-{other}/NLLB.en-{other}.{lang2}")):       
+         LENGTH_RATIO_MEAN = colab_ratios[f"{lang1}, {lang2}"][0]
+         LENGTH_RATIO_STD = colab_ratios[f"{lang1}, {lang2}"][1]
+         return LENGTH_RATIO_MEAN, LENGTH_RATIO_STD
+    else: 
+        with open(f"data/en-{other}/NLLB.en-{other}.{lang1}") as f1, open(f"data/en-{other}/NLLB.en-{other}.{lang2}") as f2: 
+            ratios = []
+            for line1, line2 in zip(f1, f2):
+                line1 = line1.removesuffix("\n")
+                line2= line2.removesuffix("\n")
+                ratios.append(float(len(line1)/len(line2)))
+        import statistics 
+        LENGTH_RATIO_MEAN = statistics.fmean(ratios)
+        LENGTH_RATIO_STD = statistics.stdev(ratios)
+        print(f"Mean: {LENGTH_RATIO_MEAN}, Std: {LENGTH_RATIO_STD}")
+        return LENGTH_RATIO_MEAN, LENGTH_RATIO_STD
 
 def preprocess_line(line):
     line = line.removesuffix("\n")
@@ -357,7 +367,7 @@ def main(files, output, model):
     filtering_stats["After performing language identification"] = df.shape[0]
     #Calculate and filter according to the similarity scores for the sentence pairs
    
-    BATCH_SIZE = 512  
+    BATCH_SIZE = 1024 
 
     all_scores = []
     total = df.shape[0]
