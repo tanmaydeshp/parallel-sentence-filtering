@@ -160,6 +160,8 @@ def check_languages(df, langs):
     df[f"{langs[1]} score"] = lang2_scores
     df = static_filter(df, f"{langs[0]} score", 0.5)
     df = static_filter(df, f"{langs[1]} score", 0.5)
+    #df = distribution_filter(df, f"{langs[0]} score")
+    #df = distribution_filter(df, f"{langs[1]} score")
     return df 
 
 #Convert Moses format files into a pandas DataFrame
@@ -265,6 +267,17 @@ def distribution_filter(df, column):
     df = df[df[column] >= mode]
     return df
 
+def statistical_filter(df, column):
+    scores = list(df[column])
+    import statistics
+    mean = statistics.fmean(scores)
+    std = statistics.stdev(scores)
+    threshold = mean - std
+    df.sort_values(column, ascending=False, inplace=True)
+    df = df[df[column] >= threshold]
+    return df
+     
+
 def percentile_filter(df, column, percentile=75):
     import numpy as np
     data = df[column]
@@ -302,6 +315,7 @@ def word_alignment_filter(df, langs):
         alignment_score.append(float(split_align[2]))
     df["alignment score"] = alignment_score
     df = static_filter(df, "alignment score", 0.3)
+    #df = distribution_filter(df, "alignment score")
     return df
 
 def tsv_to_moses_files(file):
