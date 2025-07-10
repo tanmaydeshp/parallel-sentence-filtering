@@ -15,7 +15,7 @@ from transformers import XLMRobertaModel, XLMRobertaTokenizer, AutoConfig, AutoM
 labse_encoder = SentenceTransformer('sentence-transformers/LaBSE', device=device)
 lang_codes = {"english": "__label__eng_Latn", "sinhala": "__label__sin_Sinh", "nepali": "__label__npi_Deva"}
 lang_suffixes = {"en": "english", "si": "sinhala", "ne": "nepali"}
-lang_laser_encoders = {} #sdf
+lang_laser_encoders = {} 
 import argparse
 torch.serialization.add_safe_globals([argparse.Namespace])
 from laser_encoders import LaserEncoderPipeline
@@ -76,7 +76,6 @@ def set_NLLB_ratios(lang1, lang2):
                      "ne, en": (1.1109355531682032, 0.31124711658334797),
                      "en, si": (0.968442560084747, 0.2514354396303809), 
                      "si, en": (1.1030591942688206, 0.2932328170981356)}
-    print(lang1, lang2)
     global LENGTH_RATIO_MEAN, LENGTH_RATIO_STD
     other = ""
     if lang1 != "en":
@@ -97,7 +96,6 @@ def set_NLLB_ratios(lang1, lang2):
         import statistics 
         LENGTH_RATIO_MEAN = statistics.fmean(ratios)
         LENGTH_RATIO_STD = statistics.stdev(ratios)
-        print(f"Mean: {LENGTH_RATIO_MEAN}, Std: {LENGTH_RATIO_STD}")
         return LENGTH_RATIO_MEAN, LENGTH_RATIO_STD
 
 def preprocess_line(line):
@@ -342,6 +340,7 @@ def tsv_to_moses_files(file):
 def main(files, output, model):
     type = ""
     import pandas as pd
+    import json 
     df = None
     filtering_stats = {}
     if len(files) == 1:
@@ -367,6 +366,8 @@ def main(files, output, model):
          langs.append(lang_suffixes[lang2])
          df = moses_to_df(files[0], files[1], langs[0], langs[1])
     set_NLLB_ratios(lang1, lang2)
+    #Raw corpus size 
+    filtering_stats["Raw corpus size"] = df.shape[0]
     #Remove duplicated sentence pairs 
     df.drop_duplicates(inplace=True, ignore_index=True)
     filtering_stats["After dropping duplicates"] = df.shape[0]
@@ -414,7 +415,9 @@ def main(files, output, model):
     #Print filtering stats
     for item in filtering_stats.keys():
         print(item + f": {filtering_stats[item]}\n")
-
+    json_name = output.split("/")[-1].removesuffix(".tsv")
+    with open(f"stats/{json_name}.json", "w", encoding="utf-8") as f:
+         f.write(json.dumps(filtering_stats))
 def main_cli(): 
     parser = argparse.ArgumentParser("filtering.py")
     parser.add_argument("--files", "-f", type=str, nargs="+")

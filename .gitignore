@@ -10,3 +10,4 @@ nmt_evaluation
 outputs/
 update_nmt.sh
 comet_eval.ipynb 
+stats 
