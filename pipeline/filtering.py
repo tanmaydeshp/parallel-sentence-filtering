@@ -256,7 +256,10 @@ def find_similarity_score(embeddings1, embeddings2):
     return similarity_scores
 
 #Given a pandas DataFrame, filter best x percent of sentence pairs and store the results in a .tsv file
-def distribution_filter(df, column): 
+def distribution_filter(df, column, limit=False, thresh=None): 
+    if limit and thresh: 
+         df = df[:thresh+1]
+         return df 
     import numpy as np
     hist, bin_edges = np.histogram(list(df[column]), bins=100)
     peak_bin_index = np.argmax(hist)
@@ -287,7 +290,10 @@ def static_filter(df, column, threshold):
      df = df[df[column] >= threshold]
      return df 
 
-def word_alignment_filter(df, langs):
+def word_alignment_filter(df, langs, limit=False, thresh=None):
+    if limit and thresh: 
+         df = df[:thresh + 1]
+         return df 
     import align_source_target as ast
     source_lines = df[langs[0]]
     target_lines = df[langs[1]]
@@ -314,33 +320,33 @@ def word_alignment_filter(df, langs):
     df["alignment score"] = alignment_score
     df = static_filter(df, "alignment score", 0.3)
     #df = distribution_filter(df, "alignment score")
+    df.to_csv("aligned.tsv", sep="\t", index=None)
     return df
 
-def tsv_to_moses_files(file):
+def tsv_to_moses_files(file, suffix1, suffix2):
     prefix = file.removesuffix(".tsv").removeprefix("outputs/")
     with open(file, "r", encoding="utf-8") as f:
-        en_lines = []
-        si_lines = []    
+        lang1_lines = []
+        lang2_lines = []    
         scores = []
         for line in f:
             split = line.split("\t")
-            en_lines.append(preprocess_line(split[1]))
-            si_lines.append(preprocess_line(split[2]))
+            lang1_lines.append(preprocess_line(split[1]))
+            lang2_lines.append(preprocess_line(split[2]))
             scores.append(preprocess_line(split[3]))
-    with open(f"{prefix}.en", "w", encoding="utf-8") as f:
-        for line in en_lines[1:]:
+    with open(f"{prefix}.{suffix1}", "w", encoding="utf-8") as f:
+        for line in lang1_lines[1:]:
             f.write(f"{line}\n")
-    with open(f"{prefix}.si", "w", encoding="utf-8") as f:
-        for line in si_lines[1:]:
+    with open(f"{prefix}.{suffix2}", "w", encoding="utf-8") as f:
+        for line in lang2_lines[1:]:
             f.write(f"{line}\n")
     with open(f"{prefix}.scores.txt", "w", encoding="utf-8") as f:
         for line in scores[1:]:
             f.write(f"{line}\n")
 
-def main(files, output, model):
+
+def return_prefiltered(files):
     type = ""
-    import pandas as pd
-    import json 
     df = None
     filtering_stats = {}
     if len(files) == 1:
@@ -369,6 +375,7 @@ def main(files, output, model):
     #Raw corpus size 
     filtering_stats["Raw corpus size"] = df.shape[0]
     #Remove duplicated sentence pairs 
+    
     df.drop_duplicates(inplace=True, ignore_index=True)
     filtering_stats["After dropping duplicates"] = df.shape[0]
     #Remove pairs where the ratios of words per sentence is too unlikely
@@ -380,37 +387,90 @@ def main(files, output, model):
     #Remove pairs where one of the sentences is in the wrong language
     df = check_languages(df, langs)
     filtering_stats["After performing language identification"] = df.shape[0]
+    df.to_csv("prefiltered.tsv", sep="\t", index=None)
+    return df, langs, filtering_stats 
+
+def batch_embeds(start, end, langs, model):
+    with open("embeddings.tsv", "a+", encoding="utf-8") as file, open("prefiltered.tsv", "r", encoding="utf-8") as file2:
+        i = 0 
+        lang1_lines = []
+        lang2_lines = []
+        for line in file2:
+            if i < start: 
+                i = i + 1
+                continue 
+            elif i > end:
+                break 
+            else: 
+                split = line.split("\t")
+                lang1_lines.append(preprocess_line(split[1]))
+                lang2_lines.append(preprocess_line(split[2])) 
+                i = i + 1
+        e1 = to_multilingual_embedding(langs[0], lang1_lines, model)
+        e2 = to_multilingual_embedding(langs[1], lang2_lines, model)
+        similarity_scores = find_similarity_score(e1, e2)
+        for score in similarity_scores:
+            file.write(f"{score}\n")
+
+def scores_to_prealign(prefiltered, scores, limit=False, thresh=None): 
+     import pandas as pd 
+     df = pd.read_csv(prefiltered, sep="\t")
+     all_scores = []
+     with open(scores, "r", encoding="utf-8") as file: 
+          for score in file:
+               all_scores.append(float(preprocess_line(score)))
+     df["similarity score"] = all_scores 
+     df = distribution_filter(df, "similarity score", limit, thresh)
+     df.to_csv("prealigned.tsv", sep="\t", index=None)
+     return df
+
+def find_token_count(df, langs, limit):
+    sentences1 = df[langs[0]]
+    sentences2 = df[langs[0]]
+    unique_tokens = set()
+    i = 0
+    thresh = -1
+    for s1, s2 in zip(sentences1, sentences2):
+        s1_words = s1.split(" ")
+        s2_words = s2.split(" ") 
+        unique_tokens.update(s1_words)
+        unique_tokens.update(s2_words)
+        if len(unique_tokens) >= limit:
+             thresh = i
+        i = i + 1
+    return len(unique_tokens), thresh 
+
+def main(files, output, model, limit=False):
+    new_count = 0 
+    thresh = 0
+    import json 
+    df, langs, filtering_stats = return_prefiltered(files)
     #Calculate and filter according to the similarity scores for the sentence pairs
-   
     BATCH_SIZE = 1024 
-
-    all_scores = []
-    total = df.shape[0]
-    num_batches = ceil(total / BATCH_SIZE)
-
-    for i in range(num_batches):
-        start = i * BATCH_SIZE
-        end = min((i + 1) * BATCH_SIZE, total)
-        
-        batch_df = df.iloc[start:end]
-        
-        lang1_embedding = to_multilingual_embedding(langs[0], batch_df[langs[0]].tolist(), model)
-        lang2_embedding = to_multilingual_embedding(langs[1], batch_df[langs[1]].tolist(), model)
-        
-        scores = find_similarity_score(lang1_embedding, lang2_embedding)
-        all_scores.extend(scores)
-
-    df["similarity score"] = all_scores
-    df = distribution_filter(df, "similarity score")
+    with open("prefiltered.tsv", "r", encoding="utf-8") as file:
+         pf_lines = file.readlines()
+    numlines = len(pf_lines)
+    for i in range(1, numlines + 1, BATCH_SIZE):
+        batch_embeds(i, i + BATCH_SIZE, langs, model)
+    df = scores_to_prealign("prefiltered.tsv", "embeddings.tsv")
+    if limit: 
+         new_count, _ = find_token_count(df, langs)
+         if new_count < 5e6: 
+              df = scores_to_prealign("prefiltered.tsv", "embeddings.tsv", True, thresh) 
+              df.to_csv("final.tsv", sep="\t", index=None)
+              return 
     filtering_stats["After filtering based on similarity scores"] = df.shape[0]
-    #Filter according to word alignment scores for the sentence pairs
-    # df = df[df[langs[0]].str.strip() != ""]
-    # df = df[df[langs[1]].str.strip() != ""]
     df = df.dropna(subset=[langs[0], langs[1]])
     df = df.reset_index(drop=True)
+    df_copy = df.copy()
     df= word_alignment_filter(df, langs)
+    if limit: 
+         new_count, _ = find_token_count(df, langs)
+         if new_count < 5e6: 
+              df_copy = word_alignment_filter(df_copy, langs, True, thresh) 
+              df_copy.to_csv("final.tsv", sep="\t", index=None)
+              return 
     filtering_stats["After filtering based on word alignment"] = df.shape[0]
-    #Create .tsv file with filtered output
     df.to_csv(output, sep="\t")
     #Print filtering stats
     for item in filtering_stats.keys():
@@ -418,12 +478,14 @@ def main(files, output, model):
     json_name = output.split("/")[-1].removesuffix(".tsv")
     with open(f"stats/{json_name}.json", "w", encoding="utf-8") as f:
          f.write(json.dumps(filtering_stats))
+
 def main_cli(): 
     parser = argparse.ArgumentParser("filtering.py")
     parser.add_argument("--files", "-f", type=str, nargs="+")
     parser.add_argument("--output", "-o", type=str)
     parser.add_argument("--model", "-m", type=str)
+    parser.add_argument("--limit", "-l", type=bool, required=False)
     args = parser.parse_args()
-    main(args.files, args.output, args.model)
+    main(args.files, args.output, args.model, args.limit)
 if __name__ == "__main__":
     main_cli()
