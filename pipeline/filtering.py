@@ -105,28 +105,54 @@ def preprocess_line(line):
     return line
 
 #Check if the lengths of the sentence pairs match:
-def check_lengths(df, lang1, lang2, z_thresh=1.645):
-    #Current default z_thresh is for a 90% confidence interval
+def check_lengths(df, lang1, lang2, z_thresh=2.326):
+    #Current default z_thresh is for a 98% confidence interval
     import numpy as np
     ratios = df[f"{lang1}"].apply(lambda x: len(x.split())) / df[f"{lang2}"].apply(lambda x: len(x.split()) if len(x.split()) > 0 else 1)
     z_scores = list(map(lambda ratio : ((ratio - LENGTH_RATIO_MEAN) / LENGTH_RATIO_STD), ratios))
     return df[np.abs(z_scores) <= z_thresh].reset_index(drop=True)
 
-def check_script(sentence, lang):
-    from GlotScript import sp, sc 
-    GlotScript_codes = {"english": "Latn", "sinhala": "Sinh", "nepali": "Deva"}
-    result = sc(sentence)
-    # script_score = sp(sentence)[1]
-    if GlotScript_codes[lang] in result.keys() and len(result[GlotScript_codes[lang]])/len(sentence) >= 0.2:
-        print(len(result[GlotScript_codes[lang]])/len(sentence))
-        return True
-    else:
-        return False 
+# def check_script(sentence, lang):
+#     from GlotScript import sp, sc 
+#     GlotScript_codes = {"english": "Latn", "sinhala": "Sinh", "nepali": "Deva"}
+#     result = sc(sentence)
+#     # script_score = sp(sentence)[1]
+#     if GlotScript_codes[lang] in result.keys() and len(result[GlotScript_codes[lang]])/len(sentence) >= 0.2:
+#         print(len(result[GlotScript_codes[lang]])/len(sentence))
+#         return True
+#     else:
+#         return False 
 
 def check_scripts(df, langs):
-    lang1_mask = df[f"{langs[0]}"].apply(check_script, args=(langs[0],)) 
-    lang2_mask = df[f"{langs[1]}"].apply(check_script, args=(langs[1],))
-    return df[lang1_mask & lang2_mask].reset_index(drop=True)
+    import pandas as pd 
+    lang1_sentences = df[langs[0]]
+    lang2_sentences = df[langs[1]]
+    lang1_mask = []
+    lang2_mask = []
+    lang1_scores = []
+    lang2_scores = []
+    from GlotScript import sp, sc 
+    GlotScript_codes = {"english": "Latn", "sinhala": "Sinh", "nepali": "Deva"}
+    for s1, s2 in zip(lang1_sentences, lang2_sentences):
+         result1 = sc(s1)
+         score1 = sp(s1)[1]
+         result2 = sc(s2)
+         score2 = sp(s2)[1]
+         if GlotScript_codes[langs[0]] in result1.keys() and len(result1[GlotScript_codes[langs[0]]])/len(s1) >= 0.1:
+            lang1_mask.append(True)
+            lang1_scores.append(score1)
+         else:
+            lang1_mask.append(False)
+            lang1_scores.append(0)
+         if GlotScript_codes[langs[1]] in result2.keys() and len(result2[GlotScript_codes[langs[1]]])/len(s2) >= 0.1:
+            lang2_mask.append(True)
+            lang2_scores.append(score2)
+         else:
+            lang2_mask.append(False)
+            lang2_scores.append(0)
+    df[f"{langs[0]} script score"] = lang1_scores 
+    df[f"{langs[1]} script score"] = lang2_scores
+    return df[pd.Series(lang1_mask) & pd.Series(lang2_mask)].reset_index(drop=True)
 
 #Return true if the sentence belongs to the specified language
 # def check_language(sentence, language_code, threshold):
@@ -156,10 +182,10 @@ def check_languages(df, langs):
             lang2_scores.append(float(x[1][list(x[0]).index(lang_codes[langs[1]])]))
         else:
             lang2_scores.append(0) 
-    df[f"{langs[0]} score"] = lang1_scores
-    df[f"{langs[1]} score"] = lang2_scores
-    df = static_filter(df, f"{langs[0]} score", 0.3)
-    df = static_filter(df, f"{langs[1]} score", 0.3)
+    df[f"{langs[0]} language score"] = lang1_scores
+    df[f"{langs[1]} language score"] = lang2_scores
+    df = static_filter(df, f"{langs[0]} language score", 0.2)
+    df = static_filter(df, f"{langs[1]} language score", 0.2)
     #df = distribution_filter(df, f"{langs[0]} score")
     #df = distribution_filter(df, f"{langs[1]} score")
     return df 
@@ -319,6 +345,36 @@ def word_alignment_filter(df, langs, outdir):
     df.to_csv(f"{outdir}/aligned.tsv", sep="\t", index=None)
     return df
 
+def batch_aligns(df, langs, outdir):
+    import align_source_target as ast
+    source_lines = df[langs[0]]
+    target_lines = df[langs[1]]
+    margin_lines = list(df.index)
+    src_file = ""
+    trg_file=""
+    mrg_file = ""
+    for id, sentence in zip(margin_lines, source_lines):
+        src_file = src_file + f"{id}" + "\t" + sentence + "\n"
+    for id, sentence in zip(margin_lines, target_lines):
+        trg_file = trg_file + f"{id}" + "\t" + sentence + "\n"
+    for id, sentence in zip(margin_lines, source_lines):
+        mrg_file = mrg_file + f"{id}" + "\t" + f"{id}" + "\n"
+    src_file_dict = ast.text_to_dict(src_file)
+    trg_file_dict = ast.text_to_dict(trg_file)
+    margin_train_file = mrg_file
+    split_margin_train = margin_train_file.split('\n')[:-1]
+    align_list_train = ast.align_source_target(split_margin_train, src_file_dict, trg_file_dict) 
+    align_rate_train_file = ast.align_rate_file(split_margin_train, align_list_train, src_file_dict, trg_file_dict) 
+    alignment_score = []
+    for line in align_rate_train_file:
+        split_align = line.split("\t")
+        alignment_score.append(float(split_align[2]))
+    with open(f"{outdir}/alignments.txt", "a+", encoding="utf-8") as file:
+        for alignment in alignment_score:
+            file.write(f"{alignment}\n")
+
+        
+
 def tsv_to_moses_files(file, suffix1, suffix2):
     prefix = file.removesuffix(".tsv").removeprefix("outputs/")
     with open(file, "r", encoding="utf-8") as f:
@@ -339,6 +395,50 @@ def tsv_to_moses_files(file, suffix1, suffix2):
     with open(f"{prefix}.scores.txt", "w", encoding="utf-8") as f:
         for line in scores[1:]:
             f.write(f"{line}\n")
+
+def tsv_to_prefiltering_scores(tsv, langs, output):
+    langs_suffixes = {"english":"en", "sinhala": "si", "nepali":"ne"}
+    import pandas as pd 
+    df = pd.read_csv(tsv, sep="\t")
+    lang1_script_scores = df[f"{langs[0]} script score"]
+    lang2_script_scores = df[f"{langs[1]} script score"]
+    lang1_language_scores = df[f"{langs[0]} language score"]
+    lang2_language_scores = df[f"{langs[1]} language score"]
+    scores = (lang1_script_scores + lang2_script_scores + lang1_language_scores + lang2_language_scores)/4
+    df["prefiltered score"] = scores 
+    df.sort_values(by="prefiltered score", inplace=True, ascending=False)
+    lang1_sentences = df[f"{langs[0]}"]
+    lang2_sentences = df[f"{langs[1]}"]
+    with open(f"{output}/prefiltered_lang1.{langs_suffixes[langs[0]]}", "w", encoding="utf-8") as f1:
+        for line in lang1_sentences:
+            f1.write(f"{line}\n")
+    with open(f"{output}/prefiltered_lang2.{langs_suffixes[langs[1]]}", "w", encoding="utf-8") as f2:
+        for line in lang2_sentences:
+            f2.write(f"{line}\n")
+    with open(f"{output}/prefiltered_scores.txt", "w", encoding="utf-8") as file:
+        for score in df["prefiltered score"]: 
+            file.write(f"{score}\n")
+
+def tsv_to_final_scores(tsv, langs, output):
+    langs_suffixes = {"english":"en", "sinhala": "si", "nepali":"ne"}
+    import pandas as pd 
+    df = pd.read_csv(tsv, sep="\t")
+    similarity_scores = df["similarity score"]
+    alignment_scores = df["alignment score"]
+    scores = (similarity_scores + alignment_scores)/2
+    df["final score"] = scores 
+    df.sort_values(by="final score", inplace=True, ascending=False)
+    lang1_sentences = df[f"{langs[0]}"]
+    lang2_sentences = df[f"{langs[1]}"]
+    with open(f"{output}/final_lang1.{langs_suffixes[langs[0]]}", "w", encoding="utf-8") as f1:
+        for line in lang1_sentences:
+            f1.write(f"{line}\n")
+    with open(f"{output}/final_lang2.{langs_suffixes[langs[1]]}", "w", encoding="utf-8") as f2:
+        for line in lang2_sentences:
+            f2.write(f"{line}\n")
+    with open(f"{output}/final_scores.txt", "w", encoding="utf-8") as file:
+        for score in df["final score"]: 
+            file.write(f"{score}\n")
 
 
 def return_prefiltered(files, outdir):
@@ -399,8 +499,8 @@ def batch_embeds(start, end, langs, model, outdir):
                 break 
             else: 
                 split = line.split("\t")
-                lang1_lines.append(preprocess_line(split[1]))
-                lang2_lines.append(preprocess_line(split[2])) 
+                lang1_lines.append(preprocess_line(split[0]))
+                lang2_lines.append(preprocess_line(split[1])) 
                 i = i + 1
         e1 = to_multilingual_embedding(langs[0], lang1_lines, model)
         e2 = to_multilingual_embedding(langs[1], lang2_lines, model)
@@ -416,14 +516,13 @@ def scores_to_prealign(prefiltered, scores, outdir):
           for score in file:
                all_scores.append(float(preprocess_line(score)))
      df["similarity score"] = all_scores 
-     df = statistical_filter(df, "similarity score")
+     #df = statistical_filter(df, "similarity score")
      df.to_csv(f"{outdir}/prealigned.tsv", sep="\t", index=None)
      return df
 
 
 def main(files, output, model):
     import json 
-    import os 
     import os
     import shutil
     if os.path.exists(output):
@@ -435,15 +534,17 @@ def main(files, output, model):
     with open(f"{output}/prefiltered.tsv", "r", encoding="utf-8") as file:
          pf_lines = file.readlines()
     numlines = len(pf_lines)
-    for i in range(1, numlines + 1, BATCH_SIZE):
+    for i in range(1, numlines + 1, BATCH_SIZE + 1):
         batch_embeds(i, i + BATCH_SIZE, langs, model, output)
     df = scores_to_prealign(f"{output}/prefiltered.tsv", f"{output}/embeddings.tsv", output)
+    tsv_to_prefiltering_scores(f"{output}/prefiltered.tsv", langs, output)
     filtering_stats["After filtering based on similarity scores"] = df.shape[0]
     df = df.dropna(subset=[langs[0], langs[1]])
     df = df.reset_index(drop=True)
     df= word_alignment_filter(df, langs, output)
     filtering_stats["After filtering based on word alignment"] = df.shape[0]
-    df.to_csv(f"{output}/final.tsv", sep="\t")
+    df.to_csv(f"{output}/final.tsv", sep="\t", index=None)
+    tsv_to_final_scores(f"{output}/final.tsv", langs, output)
     #Print filtering stats
     for item in filtering_stats.keys():
         print(item + f": {filtering_stats[item]}\n")
