@@ -345,7 +345,10 @@ def word_alignment_filter(df, langs, outdir):
     df.to_csv(f"{outdir}/aligned.tsv", sep="\t", index=None)
     return df
 
-def batch_aligns(df, langs, outdir):
+def batch_aligns(start, end, langs, outdir):
+    import pandas as pd 
+    df = pd.read_csv(f"{outdir}/prealigned.tsv", sep="\t")
+    df = df[start:end]
     import align_source_target as ast
     source_lines = df[langs[0]]
     target_lines = df[langs[1]]
@@ -372,8 +375,7 @@ def batch_aligns(df, langs, outdir):
     with open(f"{outdir}/alignments.txt", "a+", encoding="utf-8") as file:
         for alignment in alignment_score:
             file.write(f"{alignment}\n")
-
-        
+    return alignment_score
 
 def tsv_to_moses_files(file, suffix1, suffix2):
     prefix = file.removesuffix(".tsv").removeprefix("outputs/")
@@ -541,7 +543,19 @@ def main(files, output, model):
     filtering_stats["After filtering based on similarity scores"] = df.shape[0]
     df = df.dropna(subset=[langs[0], langs[1]])
     df = df.reset_index(drop=True)
-    df= word_alignment_filter(df, langs, output)
+    # alignments = []
+    # for i in range(0, df.shape[0], BATCH_SIZE): 
+    #     align_scores = batch_aligns(df[i:i+BATCH_SIZE], langs, output)
+    #     alignments.extend(align_scores)
+    # df["alignment score"] = alignments
+    alignments = []
+    for i in range(0, df.shape[0], BATCH_SIZE): 
+        align_scores = batch_aligns(i, i + BATCH_SIZE, langs, output)
+        alignments.extend(align_scores)
+    df["alignment score"] = alignments
+    # df = static_filter(df, "alignment score", 0.3)
+    #df = distribution_filter(df, "alignment score")
+    df.to_csv(f"{output}/aligned.tsv", sep="\t", index=None)
     filtering_stats["After filtering based on word alignment"] = df.shape[0]
     df.to_csv(f"{output}/final.tsv", sep="\t", index=None)
     tsv_to_final_scores(f"{output}/final.tsv", langs, output)
