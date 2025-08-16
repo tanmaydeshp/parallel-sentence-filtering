@@ -138,13 +138,13 @@ def check_scripts(df, langs):
          score1 = sp(s1)[1]
          result2 = sc(s2)
          score2 = sp(s2)[1]
-         if GlotScript_codes[langs[0]] in result1.keys() and len(result1[GlotScript_codes[langs[0]]])/len(s1) >= 0.1:
+         if GlotScript_codes[langs[0]] in result1.keys() and len(result1[GlotScript_codes[langs[0]]])/len(s1) >= 0.2:
             lang1_mask.append(True)
             lang1_scores.append(score1)
          else:
             lang1_mask.append(False)
             lang1_scores.append(0)
-         if GlotScript_codes[langs[1]] in result2.keys() and len(result2[GlotScript_codes[langs[1]]])/len(s2) >= 0.1:
+         if GlotScript_codes[langs[1]] in result2.keys() and len(result2[GlotScript_codes[langs[1]]])/len(s2) >= 0.2:
             lang2_mask.append(True)
             lang2_scores.append(score2)
          else:
@@ -184,8 +184,8 @@ def check_languages(df, langs):
             lang2_scores.append(0) 
     df[f"{langs[0]} language score"] = lang1_scores
     df[f"{langs[1]} language score"] = lang2_scores
-    df = static_filter(df, f"{langs[0]} language score", 0.2)
-    df = static_filter(df, f"{langs[1]} language score", 0.2)
+    df = static_filter(df, f"{langs[0]} language score", 0.3)
+    df = static_filter(df, f"{langs[1]} language score", 0.3)
     #df = distribution_filter(df, f"{langs[0]} score")
     #df = distribution_filter(df, f"{langs[1]} score")
     return df 
@@ -427,7 +427,11 @@ def tsv_to_final_scores(tsv, langs, output):
     df = pd.read_csv(tsv, sep="\t")
     similarity_scores = df["similarity score"]
     alignment_scores = df["alignment score"]
-    scores = (similarity_scores + alignment_scores)/2
+    lang1_script_scores = df[f"{langs[0]} script score"]
+    lang2_script_scores = df[f"{langs[1]} script score"]
+    lang1_lang_scores = df[f"{langs[0]} language score"]
+    lang2_lang_scores = df[f"{langs[1]} language score"]
+    scores = (similarity_scores + alignment_scores + (lang1_lang_scores + lang2_lang_scores + lang1_script_scores + lang2_script_scores)/4)/3
     df["final score"] = scores 
     df.sort_values(by="final score", inplace=True, ascending=False)
     lang1_sentences = df[f"{langs[0]}"]
@@ -489,41 +493,79 @@ def return_prefiltered(files, outdir):
     return df, langs, filtering_stats 
 
 def batch_embeds(start, end, langs, model, outdir):
-    with open(f"{outdir}/embeddings.tsv", "a+", encoding="utf-8") as file, open(f"{outdir}/prefiltered.tsv", "r", encoding="utf-8") as file2:
-        i = 0 
-        lang1_lines = []
-        lang2_lines = []
-        for line in file2:
-            if i < start: 
-                i = i + 1
-                continue 
-            elif i > end:
-                break 
-            else: 
-                split = line.split("\t")
-                lang1_lines.append(preprocess_line(split[0]))
-                lang2_lines.append(preprocess_line(split[1])) 
-                i = i + 1
+    import pandas as pd 
+    df = pd.read_csv(f"{outdir}/prefiltered.tsv", sep="\t")
+    total = df.shape[0]
+    df = df[start:end]
+    lang1_lines = list(df[f"{langs[0]}"])
+    lang2_lines = list(df[f"{langs[1]}"])
+    ids = list(df.index) 
+    with open(f"{outdir}/embeddings.tsv", "a+", encoding="utf-8") as file:
         e1 = to_multilingual_embedding(langs[0], lang1_lines, model)
         e2 = to_multilingual_embedding(langs[1], lang2_lines, model)
         similarity_scores = find_similarity_score(e1, e2)
         for score in similarity_scores:
             file.write(f"{score}\n")
+    with open(f"{outdir}/{langs[0]}_embeds.vec", "a+", encoding="utf-8") as f:
+        if start == 0:
+            f.write(f"{total} {e1.shape[1]}\n")
+        for id, encoding in zip(ids, e1):
+            encoding_str = " ".join([str(x) for x in encoding])
+            if len([str(x) for x in encoding]) != 768:
+                print("ERROR")
+            f.write(f"src-{id} {encoding_str}\n")
+    with open(f"{outdir}/{langs[1]}_embeds.vec", "a+", encoding="utf-8") as f:
+        if start == 0:
+            f.write(f"{total} {e2.shape[1]}\n")
+        for id, encoding in zip(ids,e2):
+            encoding_str = " ".join([str(x) for x in encoding])
+            f.write(f"tgt-{id} {encoding_str}\n")
+    return total, e1.shape[1]
 
-def scores_to_prealign(prefiltered, scores, outdir): 
-     import pandas as pd 
-     df = pd.read_csv(prefiltered, sep="\t")
-     all_scores = []
-     with open(scores, "r", encoding="utf-8") as file: 
-          for score in file:
-               all_scores.append(float(preprocess_line(score)))
-     df["similarity score"] = all_scores 
-     #df = statistical_filter(df, "similarity score")
-     df.to_csv(f"{outdir}/prealigned.tsv", sep="\t", index=None)
-     return df
+def csls_adjustment(outdir, langs):
+    import pandas as pd
+    import bilingual_nearest_neighbor as bnn 
+    import torch 
+    bnn.main(source_embeddings=f"{outdir}/{langs[0]}_embeds.vec", 
+            target_embeddings=f"{outdir}/{langs[1]}_embeds.vec", 
+            output=f"{outdir}/st_embeds.txt", 
+            binary=0, method="csls", knn=10, cslsknn=10, gpu=torch.cuda.is_available)
+    df = pd.read_csv("{outdir}/prefiltered.tsv", sep="\t")
+    csls_scores = []
+    with open(f"{outdir}/st_embeds.txt", "r", encoding="utf-8") as f:
+        for line in f: 
+            split = line.split("\t")
+            src_id = int(preprocess_line(split[0].split("-")[-1]))
+            split = split[1:]
+            tgt_ids = []
+            tgt_scores = []
+            idx = -1 
+            for i in range(0, len(split) -1, 2):
+                tgt_ids.append(int(preprocess_line(split[i].split("-")[-1])))
+                tgt_scores.append(float(preprocess_line(split[i+1])))
+            for j in range(0, len(tgt_ids)):
+                if tgt_ids[j] == src_id:
+                    score = tgt_scores[j]
+                    idx = j
+                    csls_scores.append(score)
+                    break 
+            if idx==-1:
+                import statistics
+                mean = statistics.fmean(tgt_scores)
+                csls_scores.append(mean)       
+    df["similarity score"] = csls_scores
+    df.to_csv("{outdir}/prealigned.tsv", sep="\t", index=None)
+    alignments = []
+    with open("{outdir}/alignments.txt", "r", encoding="utf-8") as f: 
+        for line in f: 
+            alignments.append(float(preprocess_line(line)))
+    df["alignment score"] = alignments
+    df.to_csv("{outdir}/aligned.tsv", sep="\t", index=None)
 
 
-def main(files, output, model):
+
+
+def main(files, output, model, csls):
     import json 
     import os
     import shutil
@@ -531,15 +573,49 @@ def main(files, output, model):
         shutil.rmtree(output)
     os.makedirs(output)
     df, langs, filtering_stats = return_prefiltered(files, output)
+    tsv_to_prefiltering_scores(f"{output}/prefiltered.tsv", langs, output)
     #Calculate and filter according to the similarity scores for the sentence pairs
     BATCH_SIZE = 1024 
-    with open(f"{output}/prefiltered.tsv", "r", encoding="utf-8") as file:
-         pf_lines = file.readlines()
-    numlines = len(pf_lines)
-    for i in range(1, numlines + 1, BATCH_SIZE + 1):
+    for i in range(0, df.shape[0], BATCH_SIZE):
         batch_embeds(i, i + BATCH_SIZE, langs, model, output)
-    df = scores_to_prealign(f"{output}/prefiltered.tsv", f"{output}/embeddings.tsv", output)
-    tsv_to_prefiltering_scores(f"{output}/prefiltered.tsv", langs, output)
+    similarity_scores = []
+    if(csls):
+        import bilingual_nearest_neighbor as bnn 
+        bnn.main(source_embeddings=f"{output}/{langs[0]}_embeds.vec", 
+                target_embeddings=f"{output}/{langs[1]}_embeds.vec", 
+                output=f"{output}/st_embeds.txt", 
+                binary=0, method="csls", knn=50, cslsknn=50, gpu=torch.cuda.is_available)
+        csls_scores = []
+        with open(f"{output}/st_embeds.txt", "r", encoding="utf-8") as f:
+            for line in f: 
+                split = line.split("\t")
+                src_id = float(split[0].split("-")[-1])
+                split = split[1:]
+                tgt_ids = []
+                tgt_scores = []
+                idx = -1 
+                for i in range(0, len(split) -1, 2):
+                    tgt_ids.append(float(preprocess_line(split[i].split("-")[-1])))
+                    tgt_scores.append(float(preprocess_line(split[i+1])))
+                for j in range(0, len(tgt_ids)):
+                    if tgt_ids[j] == src_id:
+                        score = tgt_scores[j]
+                        idx = j
+                        csls_scores.append(score)
+                        break 
+                if idx==-1:
+                    csls_scores.append(0.0)
+                
+        similarity_scores = csls_scores
+    else:
+        cosine_scores = []
+        with open(f"{output}/embeddings.tsv", "r", encoding="utf-8") as file: 
+            for score in file:
+                cosine_scores.append(float(preprocess_line(score)))
+        similarity_scores = cosine_scores
+    df["similarity score"] = similarity_scores
+    df.sort_values("similarity score", ascending=False, inplace=True)
+    df.to_csv(f"{output}/prealigned.tsv",sep="\t",index=None)
     filtering_stats["After filtering based on similarity scores"] = df.shape[0]
     df = df.dropna(subset=[langs[0], langs[1]])
     df = df.reset_index(drop=True)
@@ -571,7 +647,8 @@ def main_cli():
     parser.add_argument("--files", "-f", type=str, nargs="+")
     parser.add_argument("--output", "-o", type=str)
     parser.add_argument("--model", "-m", type=str)
+    parser.add_argument("--csls", "-c", type=bool, required=False, default=False)
     args = parser.parse_args()
-    main(args.files, args.output, args.model)
+    main(args.files, args.output, args.model, args.csls)
 if __name__ == "__main__":
     main_cli()
