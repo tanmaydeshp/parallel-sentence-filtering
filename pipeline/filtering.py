@@ -135,23 +135,29 @@ def check_scripts(df, langs):
     GlotScript_codes = {"english": "Latn", "sinhala": "Sinh", "nepali": "Deva"}
     for s1, s2 in zip(lang1_sentences, lang2_sentences):
          result1 = sc(s1)
-         score1 = sp(s1)[1]
          result2 = sc(s2)
-         score2 = sp(s2)[1]
-         if GlotScript_codes[langs[0]] in result1.keys() and len(result1[GlotScript_codes[langs[0]]])/len(s1) >= 0.2:
-            lang1_mask.append(True)
+         if GlotScript_codes[langs[0]] in result1.keys():
+            score1 = sp(s1)[2]["details"][GlotScript_codes[langs[0]]]
             lang1_scores.append(score1)
          else:
-            lang1_mask.append(False)
             lang1_scores.append(0)
-         if GlotScript_codes[langs[1]] in result2.keys() and len(result2[GlotScript_codes[langs[1]]])/len(s2) >= 0.2:
-            lang2_mask.append(True)
+         if GlotScript_codes[langs[1]] in result2.keys():
+            score2 = sp(s2)[2]["details"][GlotScript_codes[langs[1]]]
             lang2_scores.append(score2)
          else:
-            lang2_mask.append(False)
             lang2_scores.append(0)
     df[f"{langs[0]} script score"] = lang1_scores 
     df[f"{langs[1]} script score"] = lang2_scores
+    for score in lang1_scores:
+        if score >= 0.45:
+            lang1_mask.append(True)
+        else:
+            lang1_mask.append(False)
+    for score in lang2_scores:
+        if score >= 0.45:
+            lang2_mask.append(True)
+        else:
+            lang2_mask.append(False)
     return df[pd.Series(lang1_mask) & pd.Series(lang2_mask)].reset_index(drop=True)
 
 #Return true if the sentence belongs to the specified language
@@ -184,8 +190,8 @@ def check_languages(df, langs):
             lang2_scores.append(0) 
     df[f"{langs[0]} language score"] = lang1_scores
     df[f"{langs[1]} language score"] = lang2_scores
-    df = static_filter(df, f"{langs[0]} language score", 0.3)
-    df = static_filter(df, f"{langs[1]} language score", 0.3)
+    df = static_filter(df, f"{langs[0]} language score", 0.35)
+    df = static_filter(df, f"{langs[1]} language score", 0.35)
     #df = distribution_filter(df, f"{langs[0]} score")
     #df = distribution_filter(df, f"{langs[1]} score")
     return df 
@@ -276,10 +282,10 @@ def to_multilingual_embedding(language, sentences, model):
 
 #Find similarity scores for sentence pairs using cosine similarity
 def find_similarity_score(embeddings1, embeddings2): 
-    import statistics
+    import numpy as np
     from sklearn.metrics.pairwise import cosine_similarity
     similarities = cosine_similarity(embeddings1, embeddings2)
-    similarity_scores = [statistics.fmean(vector) for vector in similarities]
+    similarity_scores = np.diag(similarities).tolist()
     # similarity_scores = [float(vector.sum()) for vector in similarities]
     return similarity_scores
 
@@ -431,7 +437,7 @@ def tsv_to_final_scores(tsv, langs, output):
     lang2_script_scores = df[f"{langs[1]} script score"]
     lang1_lang_scores = df[f"{langs[0]} language score"]
     lang2_lang_scores = df[f"{langs[1]} language score"]
-    scores = (similarity_scores + alignment_scores + (lang1_lang_scores + lang2_lang_scores + lang1_script_scores + lang2_script_scores)/4)/3
+    scores = (similarity_scores + alignment_scores)/2
     df["final score"] = scores 
     df.sort_values(by="final score", inplace=True, ascending=False)
     lang1_sentences = df[f"{langs[0]}"]
@@ -511,8 +517,6 @@ def batch_embeds(start, end, langs, model, outdir):
             f.write(f"{total} {e1.shape[1]}\n")
         for id, encoding in zip(ids, e1):
             encoding_str = " ".join([str(x) for x in encoding])
-            if len([str(x) for x in encoding]) != 768:
-                print("ERROR")
             f.write(f"src-{id} {encoding_str}\n")
     with open(f"{outdir}/{langs[1]}_embeds.vec", "a+", encoding="utf-8") as f:
         if start == 0:
