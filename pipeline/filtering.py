@@ -104,6 +104,11 @@ def preprocess_line(line):
     line = line.replace("\u200d", "")
     return line
 
+def dedup(df, langs):
+    df.sort_values("similarity score", ascending=False, inplace=True)
+    df.drop_duplicates(subset=[f"{langs[0]}"], inplace=True)
+    return df
+
 #Check if the lengths of the sentence pairs match:
 def check_lengths(df, lang1, lang2, z_thresh=2.326):
     #Current default z_thresh is for a 98% confidence interval
@@ -358,7 +363,7 @@ def batch_aligns(start, end, langs, outdir):
     import align_source_target as ast
     source_lines = df[langs[0]]
     target_lines = df[langs[1]]
-    margin_lines = list(df.index)
+    margin_lines = list(range(len(df)))
     src_file = ""
     trg_file=""
     mrg_file = ""
@@ -437,7 +442,7 @@ def tsv_to_final_scores(tsv, langs, output):
     lang2_script_scores = df[f"{langs[1]} script score"]
     lang1_lang_scores = df[f"{langs[0]} language score"]
     lang2_lang_scores = df[f"{langs[1]} language score"]
-    scores = (similarity_scores + alignment_scores)/2
+    scores = (0.7 * similarity_scores + 0.3 * alignment_scores)
     df["final score"] = scores 
     df.sort_values(by="final score", inplace=True, ascending=False)
     lang1_sentences = df[f"{langs[0]}"]
@@ -486,6 +491,8 @@ def return_prefiltered(files, outdir):
     
     df.drop_duplicates(inplace=True, ignore_index=True)
     filtering_stats["After dropping duplicates"] = df.shape[0]
+    #Remove boilerplate
+    df = remove_boilerplate(df, langs)
     #Remove pairs where the ratios of words per sentence is too unlikely
     df = check_lengths(df, langs[0], langs[1])
     filtering_stats["After removing length based outliers"] = df.shape[0]
@@ -566,6 +573,73 @@ def csls_adjustment(outdir, langs):
     df["alignment score"] = alignments
     df.to_csv("{outdir}/aligned.tsv", sep="\t", index=None)
 
+def boilerplate_filter(df, column, top_k=50):
+    texts = list(df[column])
+    texts_copy = list(df[column])
+    from collections import Counter 
+    from GlotScript import sp
+    phrases = []
+    for x in range(len(texts_copy)):
+        t = texts_copy[x]
+        tokens = t.strip().split()
+        for k in range(len(tokens)):
+            if tokens[k].isdigit():
+                tokens[k] = "<num>"
+            texts_copy[x] = " ".join(tokens)
+    # collect short prefixes/suffixes up to length 3 tokens
+        if len(tokens) > 1:
+            phrases.append(" ".join(tokens[:2]))
+            phrases.append(" ".join(tokens[:3]))
+            phrases.append(" ".join(tokens[:4]))
+            phrases.append(" ".join(tokens[-2:]))
+            phrases.append(" ".join(tokens[-3:]))
+            phrases.append(" ".join(tokens[-4:]))
+    common = list(Counter(phrases).most_common(top_k))
+    filter = []
+    for phrase in common:
+        if sp(phrase[0])[0] != "Deva" and phrase[1] >= 1000:
+            if len(phrase[0].split())>=2:
+                filter.append(phrase[0])
+    result = []
+    for i in range(len(filter)):
+        included = False
+        for j in range(0, len(filter)):
+            if filter[i] in filter[j] and i!=j: 
+                included = True
+                break 
+        if  not included:
+            result.append(filter[i])
+    cleaned = []
+    for i in range(len(texts)):
+        t = texts_copy[i]
+        text = texts[i]
+        for j in range(len(result)):
+            r = result[j] 
+            print(r)
+            print(text)
+            if t.strip().startswith(r):
+                tokens = text.strip().split()
+                for k in range(len(r.split())):
+                    if tokens[k].isdigit():
+                        tokens[k] = "<num>"
+                text = " ".join(tokens)
+                text = text.strip().removeprefix(r)
+            if t.strip().endswith(r):
+                tokens = text.strip().split()
+                if len(tokens) - len(r.split())>=0:
+                    for k in range(len(tokens) - len(r.split()), len(tokens)):
+                        if tokens[k].isdigit():
+                            tokens[k] = "<num>"
+                text = " ".join(tokens)
+                text = text.strip().removesuffix(r)
+        cleaned.append(text)
+    df[column] = cleaned
+    return df 
+                
+def remove_boilerplate(df, langs): 
+    df = boilerplate_filter(df, langs[0])
+    df = boilerplate_filter(df, langs[1])
+    return df 
 
 
 
@@ -637,6 +711,9 @@ def main(files, output, model, csls):
     #df = distribution_filter(df, "alignment score")
     df.to_csv(f"{output}/aligned.tsv", sep="\t", index=None)
     filtering_stats["After filtering based on word alignment"] = df.shape[0]
+    #Remove multiple translations of the same sentence 
+    df = dedup(df, langs)
+    filtering_stats["After removing multiple translations"] = df.shape[0]
     df.to_csv(f"{output}/final.tsv", sep="\t", index=None)
     tsv_to_final_scores(f"{output}/final.tsv", langs, output)
     #Print filtering stats
