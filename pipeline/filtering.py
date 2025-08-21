@@ -492,7 +492,7 @@ def return_prefiltered(files, outdir):
     df.drop_duplicates(inplace=True, ignore_index=True)
     filtering_stats["After dropping duplicates"] = df.shape[0]
     #Remove boilerplate
-    df = remove_boilerplate(df, langs)
+    # df = remove_boilerplate(df, langs)
     #Remove pairs where the ratios of words per sentence is too unlikely
     df = check_lengths(df, langs[0], langs[1])
     filtering_stats["After removing length based outliers"] = df.shape[0]
@@ -573,75 +573,58 @@ def csls_adjustment(outdir, langs):
     df["alignment score"] = alignments
     df.to_csv("{outdir}/aligned.tsv", sep="\t", index=None)
 
-def boilerplate_filter(df, column, top_k=50):
-    texts = list(df[column])
-    texts_copy = list(df[column])
-    from collections import Counter 
-    from GlotScript import sp
+def merge_phrases(common_phrases):
+    from GlotScript import sp    
+    merged = set()
     phrases = []
-    for x in range(len(texts_copy)):
-        t = texts_copy[x]
-        tokens = t.strip().split()
-        for k in range(len(tokens)):
-            if tokens[k].isdigit():
-                tokens[k] = "<num>"
-            texts_copy[x] = " ".join(tokens)
-    # collect short prefixes/suffixes up to length 3 tokens
-        if len(tokens) > 1:
-            phrases.append(" ".join(tokens[:2]))
-            phrases.append(" ".join(tokens[:3]))
-            phrases.append(" ".join(tokens[:4]))
-            phrases.append(" ".join(tokens[-2:]))
-            phrases.append(" ".join(tokens[-3:]))
-            phrases.append(" ".join(tokens[-4:]))
-    common = list(Counter(phrases).most_common(top_k))
-    filter = []
-    for phrase in common:
-        if sp(phrase[0])[0] != "Deva" and phrase[1] >= 1000:
-            if len(phrase[0].split())>=2:
-                filter.append(phrase[0])
-    result = []
-    for i in range(len(filter)):
-        included = False
-        for j in range(0, len(filter)):
-            if filter[i] in filter[j] and i!=j: 
+    for phrase in common_phrases:
+        if phrase[1] >= 1000 and sp(phrase[0])[0] != "Deva":
+            phrases.append(phrase[0])
+    for i in range(len(phrases)):
+        included = False 
+        for j in range(len(phrases)):
+            if phrases[i] in phrases[j] and i!=j:
                 included = True
-                break 
-        if  not included:
-            result.append(filter[i])
-    cleaned = []
-    for i in range(len(texts)):
-        t = texts_copy[i]
-        text = texts[i]
-        for j in range(len(result)):
-            r = result[j] 
-            print(r)
-            print(text)
-            if t.strip().startswith(r):
-                tokens = text.strip().split()
-                for k in range(len(r.split())):
-                    if tokens[k].isdigit():
-                        tokens[k] = "<num>"
-                text = " ".join(tokens)
-                text = text.strip().removeprefix(r)
-            if t.strip().endswith(r):
-                tokens = text.strip().split()
-                if len(tokens) - len(r.split())>=0:
-                    for k in range(len(tokens) - len(r.split()), len(tokens)):
-                        if tokens[k].isdigit():
-                            tokens[k] = "<num>"
-                text = " ".join(tokens)
-                text = text.strip().removesuffix(r)
-        cleaned.append(text)
-    df[column] = cleaned
+        if not included:
+            merged.add(phrases[i])
+    return merged 
+
+    
+def find_common_phrases(sentences, top_k):
+    from collections import Counter 
+    phrases = []
+    for sentence in sentences: 
+        tokens = sentence.split()
+        num_words = len(tokens)
+        if num_words >= 4:
+            phrases.append(" ".join(tokens[:4]))
+            phrases.append(" ".join(tokens[-4:]))
+        if num_words >=3:
+            phrases.append(" ".join(tokens[:3]))
+            phrases.append(" ".join(tokens[-3:]))
+        if num_words >= 2:
+            phrases.append(" ".join(tokens[:2]))
+            phrases.append(" ".join(tokens[-2:]))
+    return Counter(phrases).most_common(top_k)
+
+def remove_affix(sentence, phrase):
+    if sentence.startswith(phrase):
+        sentence = sentence.removeprefix(phrase)
+    if sentence.endswith(phrase):
+        sentence = sentence.removesuffix(phrase)
+    return sentence
+
+def boilerplate_filter(df, column, top_k=50):    
+    common_phrases = find_common_phrases(df[column], top_k)
+    merged_phrases = merge_phrases(common_phrases)
+    for phrase in merged_phrases:
+        df[column] = df[column].apply(lambda s: remove_affix(s,phrase))
     return df 
                 
 def remove_boilerplate(df, langs): 
     df = boilerplate_filter(df, langs[0])
     df = boilerplate_filter(df, langs[1])
     return df 
-
-
 
 def main(files, output, model, csls):
     import json 
@@ -711,6 +694,7 @@ def main(files, output, model, csls):
     #df = distribution_filter(df, "alignment score")
     df.to_csv(f"{output}/aligned.tsv", sep="\t", index=None)
     filtering_stats["After filtering based on word alignment"] = df.shape[0]
+    df.sort_values("similarity score", ascending=False, inplace=True)
     #Remove multiple translations of the same sentence 
     df = dedup(df, langs)
     filtering_stats["After removing multiple translations"] = df.shape[0]
