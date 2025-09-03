@@ -153,17 +153,18 @@ def check_scripts(df, langs):
             lang2_scores.append(0)
     df[f"{langs[0]} script score"] = lang1_scores 
     df[f"{langs[1]} script score"] = lang2_scores
-    for score in lang1_scores:
-        if score >= 0.45:
-            lang1_mask.append(True)
-        else:
-            lang1_mask.append(False)
-    for score in lang2_scores:
-        if score >= 0.45:
-            lang2_mask.append(True)
-        else:
-            lang2_mask.append(False)
-    return df[pd.Series(lang1_mask) & pd.Series(lang2_mask)].reset_index(drop=True)
+    # for score in lang1_scores:
+    #     if score >= 0.7:
+    #         lang1_mask.append(True)
+    #     else:
+    #         lang1_mask.append(False)
+    # for score in lang2_scores:
+    #     if score >= 0.7:
+    #         lang2_mask.append(True)
+    #     else:
+    #         lang2_mask.append(False)
+    # return df[pd.Series(lang1_mask) & pd.Series(lang2_mask)]
+    return df
 
 #Return true if the sentence belongs to the specified language
 # def check_language(sentence, language_code, threshold):
@@ -195,8 +196,8 @@ def check_languages(df, langs):
             lang2_scores.append(0) 
     df[f"{langs[0]} language score"] = lang1_scores
     df[f"{langs[1]} language score"] = lang2_scores
-    df = static_filter(df, f"{langs[0]} language score", 0.35)
-    df = static_filter(df, f"{langs[1]} language score", 0.35)
+    # df = static_filter(df, f"{langs[0]} language score", 0.5)
+    # df = static_filter(df, f"{langs[1]} language score", 0.5)
     #df = distribution_filter(df, f"{langs[0]} score")
     #df = distribution_filter(df, f"{langs[1]} score")
     return df 
@@ -488,14 +489,13 @@ def return_prefiltered(files, outdir):
     #Raw corpus size 
     filtering_stats["Raw corpus size"] = df.shape[0]
     #Remove duplicated sentence pairs 
-    
-    df.drop_duplicates(inplace=True, ignore_index=True)
-    filtering_stats["After dropping duplicates"] = df.shape[0]
+    # df.drop_duplicates(inplace=True, ignore_index=True)
+    # filtering_stats["After dropping duplicates"] = df.shape[0]
+    #Remove pairs where the ratios of words per sentence is too unlikely
+    # df = check_lengths(df, langs[0], langs[1])
+    # filtering_stats["After removing length based outliers"] = df.shape[0]
     #Remove boilerplate
     # df = remove_boilerplate(df, langs)
-    #Remove pairs where the ratios of words per sentence is too unlikely
-    df = check_lengths(df, langs[0], langs[1])
-    filtering_stats["After removing length based outliers"] = df.shape[0]
     #Remove pairs where one of the sentences is in the wrong script
     df = check_scripts(df, langs)
     filtering_stats["After performing script identification"] = df.shape[0]
@@ -541,7 +541,7 @@ def csls_adjustment(outdir, langs):
             target_embeddings=f"{outdir}/{langs[1]}_embeds.vec", 
             output=f"{outdir}/st_embeds.txt", 
             binary=0, method="csls", knn=10, cslsknn=10, gpu=torch.cuda.is_available)
-    df = pd.read_csv("{outdir}/prefiltered.tsv", sep="\t")
+    df = pd.read_csv(f"{outdir}/prefiltered.tsv", sep="\t")
     csls_scores = []
     with open(f"{outdir}/st_embeds.txt", "r", encoding="utf-8") as f:
         for line in f: 
@@ -565,20 +565,20 @@ def csls_adjustment(outdir, langs):
                 mean = statistics.fmean(tgt_scores)
                 csls_scores.append(mean)       
     df["similarity score"] = csls_scores
-    df.to_csv("{outdir}/prealigned.tsv", sep="\t", index=None)
+    df.to_csv(f"{outdir}/prealigned.tsv", sep="\t", index=None)
     alignments = []
-    with open("{outdir}/alignments.txt", "r", encoding="utf-8") as f: 
+    with open(f"{outdir}/alignments.txt", "r", encoding="utf-8") as f: 
         for line in f: 
             alignments.append(float(preprocess_line(line)))
     df["alignment score"] = alignments
-    df.to_csv("{outdir}/aligned.tsv", sep="\t", index=None)
+    df.to_csv(f"{outdir}/aligned.tsv", sep="\t", index=None)
 
 def merge_phrases(common_phrases):
     from GlotScript import sp    
     merged = set()
     phrases = []
     for phrase in common_phrases:
-        if phrase[1] >= 1000 and sp(phrase[0])[0] != "Deva":
+        if phrase[1] >= 500 and sp(phrase[0])[0] != "Deva":
             phrases.append(phrase[0])
     for i in range(len(phrases)):
         included = False 
@@ -614,11 +614,36 @@ def remove_affix(sentence, phrase):
         sentence = sentence.removesuffix(phrase)
     return sentence
 
-def boilerplate_filter(df, column, top_k=50):    
-    common_phrases = find_common_phrases(df[column], top_k)
+def boilerplate_filter(df, column, top_k=50): 
+    import numpy as np    
+    df = df.dropna()
+    i = 0
+    sentences = list(df[column])
+    new_sentences = []
+    for sentence in sentences: 
+        new_tokens = []
+        tokens = sentence.split()
+        for token in tokens: 
+            if token.isdigit():
+                new_tokens.append("<num>")
+            else:
+                new_tokens.append(token)
+        new_sentence = " ".join(new_tokens)
+        new_sentences.append(new_sentence)
+    common_phrases = find_common_phrases(new_sentences, top_k)
     merged_phrases = merge_phrases(common_phrases)
-    for phrase in merged_phrases:
-        df[column] = df[column].apply(lambda s: remove_affix(s,phrase))
+    print(merged_phrases)
+    filtered = []
+    for sentence in new_sentences:
+        for phrase in merged_phrases:
+                sentence = sentence.strip().removeprefix(phrase)
+                sentence = sentence.strip().removesuffix(phrase)
+        if sentence == "":
+            filtered.append(np.nan)
+        else:
+            filtered.append(sentence)
+    df[column] = filtered 
+    df = df.dropna()
     return df 
                 
 def remove_boilerplate(df, langs): 
